@@ -2,7 +2,10 @@ package fpf_test
 
 import (
 	"html/template"
+	"io"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"time"
@@ -10,7 +13,7 @@ import (
 	"github.com/saracen/fpf"
 )
 
-func ExampleTemplate() {
+func ExampleFormPopulationFilter_ExecuteTemplate() {
 	const tpl = `
 <html>
 <head>
@@ -39,11 +42,13 @@ func ExampleTemplate() {
 </body>
 </html>`
 
+	// Parse template
 	t, err := template.New("info").Parse(tpl)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	// Create data we'll use with the template
 	var data struct {
 		Months []time.Month
 	}
@@ -51,15 +56,15 @@ func ExampleTemplate() {
 		data.Months = append(data.Months, i)
 	}
 
+	// Set the values we want populated
 	values := url.Values{}
 	values.Set("name", "Arran Walker")
 	values.Set("food", "1")
 	values.Set("month", "3")
 
-	form := fpf.Form{Values: values}
-
+	// Execute template with fpf
 	fp := fpf.New()
-	err = fp.ExecuteTemplate([]fpf.Form{form}, os.Stdout, t, data)
+	err = fp.ExecuteTemplate([]fpf.Form{{Values: values}}, os.Stdout, t, data)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -98,6 +103,143 @@ func ExampleTemplate() {
 	//			</select>
 	//		</div>
 	//	</form>
+	//
+	// </body></html>
+}
+
+func ExampleFormPopulationFilter_ExecuteTemplate_errorInsertion() {
+	const tpl = `
+<html>
+<head>
+	<title>{{ .Title }}</title>
+</head>
+<body>
+	<form action="/" method="post">
+		<div class="form-group">
+			<label for="username">Username</label>
+			<input name="username" type="text" />
+		</div>
+
+		<div class="form-group">
+			<div class="form-group-left">
+				<label for="password">Password</label>
+				<input name="password" type="password" />
+			</div>
+			<div class="form-group-right">
+				<label for="password-confirm">Confirm Password</label>
+				<input name="password-confirm" type="password" />
+			</div>
+		</div>
+
+		<div class="form-group">
+			<label>Opt In Newsletter <input type="checkbox" name="newsletter" /></label>
+		</div>
+		<div class="form-group">
+			<label>Opt In Spam <input type="checkbox" name="spam" /></label>
+		</div>
+	</form>
+</body>
+</html>`
+
+	// Parse template
+	t, err := template.New("register").Parse(tpl)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Create validation function
+	validate := func(register url.Values) (incidents []fpf.Incident) {
+		// validate username
+		if len(register.Get("username")) < 5 {
+			incidents = append(incidents, fpf.Incident{
+				[]string{"username"},
+				[]string{"Username needs to be 5 or more characters long."},
+			})
+		}
+
+		// validate password
+		if len(register.Get("password")) < 6 {
+			incidents = append(incidents, fpf.Incident{
+				[]string{"password", "password-confirm"},
+				[]string{"Password needs to be 6 or more characters long."},
+			})
+		} else if register.Get("password") != register.Get("password-confirm") {
+			incidents = append(incidents, fpf.Incident{
+				[]string{"password", "password-confirm"},
+				[]string{"Passwords do not match."},
+			})
+		}
+
+		return incidents
+	}
+
+	// Using httptest server for example purposes
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var incidents []fpf.Incident
+
+		if r.Method == "POST" {
+			err := r.ParseForm()
+			if err != nil {
+				return
+			}
+
+			// Validate posted form
+			if incidents = validate(r.PostForm); len(incidents) == 0 {
+				// Validated successful
+				// Add saving / additional logic
+				return
+			}
+		}
+
+		// Execute template with fpf
+		fp := fpf.New()
+		fp.ExecuteTemplate([]fpf.Form{{Values: r.PostForm, Incidents: incidents}}, os.Stdout, t, struct{ Title string }{"Registration Page"})
+	}))
+	defer ts.Close()
+
+	// Emulate browser client post
+	resp, err := http.PostForm(ts.URL, url.Values{
+		"username":         {"sara"},
+		"password":         {"password"},
+		"password-comfirm": {"password123"},
+		"spam":             {"on"},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer resp.Body.Close()
+	io.Copy(os.Stdout, resp.Body)
+
+	// Output:
+	// <html><head>
+	// 	<title>Registration Page</title>
+	// </head>
+	// <body>
+	// 	<form action="/" method="post">
+	// 		<div class="form-group">
+	// 			<label for="username">Username</label>
+	// 			<input name="username" type="text" value="sara" class="error"/><ul class="errors"><li>Username needs to be 5 or more characters long.</li></ul>
+	// 		</div>
+	//
+	// 		<div class="form-group">
+	// 			<div class="form-group-left">
+	// 				<label for="password">Password</label>
+	// 				<input name="password" type="password" class="error"/>
+	// 			</div>
+	// 			<div class="form-group-right">
+	// 				<label for="password-confirm">Confirm Password</label>
+	// 				<input name="password-confirm" type="password" class="error"/>
+	// 			</div>
+	// 		<ul class="errors"><li>Passwords do not match.</li></ul></div>
+	//
+	// 		<div class="form-group">
+	// 			<label>Opt In Newsletter <input type="checkbox" name="newsletter"/></label>
+	// 		</div>
+	// 		<div class="form-group">
+	// 			<label>Opt In Spam <input type="checkbox" name="spam" checked="checked"/></label>
+	// 		</div>
+	// 	</form>
 	//
 	// </body></html>
 }
