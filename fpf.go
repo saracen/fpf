@@ -11,18 +11,35 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
+type Location string
+
+const (
+	Before Location = "before"
+	After  Location = "after"
+	Child  Location = "child"
+)
+
 // DefaultIncidentInserter is the default incident inserter used if no other
 // incident inserter is provided.
 var DefaultIncidentInserter = &GenericIncidentInserter{
-	ErrorClass: "error",
-	Template:   template.Must(template.New("error").Parse(`<ul class="errors">{{ range . }}<li>{{.}}</li>{{end}}</ul>`)),
+	ErrorClass:                   "error",
+	SingleElementErrorLocation:   After,
+	MultipleElementErrorLocation: Child,
+	Template:                     template.Must(template.New("error").Parse(`<ul class="errors">{{ range . }}<li>{{.}}</li>{{end}}</ul>`)),
 }
 
 // GenericIncidentInserter provides a basic strategy for inserting error
 // messages into the HTML node tree.
 type GenericIncidentInserter struct {
+	// The error class given to labels and form input elements
 	ErrorClass string
-	Template   *template.Template
+
+	// The location of to insert error messages
+	SingleElementErrorLocation   Location
+	MultipleElementErrorLocation Location
+
+	// The error template that will be inserted
+	Template *template.Template
 }
 
 // Insert uses a basic strategy for error insertions:
@@ -63,18 +80,29 @@ func (i *GenericIncidentInserter) Insert(elements []LabelableElement, errors []s
 	}
 
 	switch {
-	// Incident is only concerning one input so insert the error underneath it
+	// Incident is only concerning one element
 	case len(elements) == 1:
-		elements[0].Element.Parent.InsertBefore(errorNode[0], elements[0].Element.NextSibling)
+		switch i.SingleElementErrorLocation {
+		case Child:
+			elements[0].Element.Parent.AppendChild(errorNode[0])
+		case Before:
+			elements[0].Element.Parent.InsertBefore(errorNode[0], elements[0].Element)
+		case After:
+			if elements[0].Element.NextSibling != nil {
+				elements[0].Element.Parent.InsertBefore(errorNode[0], elements[0].Element.NextSibling)
+			} else {
+				elements[0].Element.Parent.AppendChild(errorNode[0])
+			}
+		}
 
-	// Incident concerns multiple inputs so insert the error as a child to their
-	// lowest common ancestor
+	// Incident concerns multiple inputs. We insert relative to the lowest
+	// common ancestor
 	default:
 		var lca func(a *html.Node, next []LabelableElement) *html.Node
 		lca = func(a *html.Node, next []LabelableElement) *html.Node {
 			b := next[0].Element
-			for ap := a.Parent; ap != nil; ap = ap.Parent {
-				for bp := b.Parent; bp != nil; bp = bp.Parent {
+			for ap := a; ap != nil; ap = ap.Parent {
+				for bp := b; bp != nil; bp = bp.Parent {
 					if ap == bp {
 						if len(next) > 1 {
 							return lca(ap, next[1:])
@@ -87,7 +115,18 @@ func (i *GenericIncidentInserter) Insert(elements []LabelableElement, errors []s
 		}
 
 		ancestor := lca(elements[0].Element, elements[1:])
-		ancestor.AppendChild(errorNode[0])
+		switch i.MultipleElementErrorLocation {
+		case Child:
+			ancestor.AppendChild(errorNode[0])
+		case Before:
+			ancestor.Parent.InsertBefore(errorNode[0], ancestor)
+		case After:
+			if ancestor.NextSibling != nil {
+				ancestor.Parent.InsertBefore(errorNode[0], ancestor.NextSibling)
+			} else {
+				ancestor.Parent.AppendChild(errorNode[0])
+			}
+		}
 	}
 
 	return nil

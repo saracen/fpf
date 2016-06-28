@@ -163,3 +163,51 @@ func TestExecuteTemplate(t *testing.T) {
 		}
 	}
 }
+
+func TestErrorLocation(t *testing.T) {
+	html := `<!DOCTYPE html><html><head></head><body><form action="/"><input type="text" name="foo" /><div><input type="checkbox" name="foo1" /><input type="checkbox" name="foo2" /></div></form></body></html>`
+	forms := []Form{
+		{
+			Values: url.Values{"foo": []string{"bar"}},
+			Incidents: []Incident{
+				{
+					[]string{"foo"},
+					[]string{"Error with single element."},
+				},
+				{
+					[]string{"foo1", "foo2"},
+					[]string{"Error with multiple elements"},
+				},
+			},
+		},
+	}
+
+	ii := &GenericIncidentInserter{
+		ErrorClass: "error",
+		Template:   DefaultIncidentInserter.Template,
+	}
+	fpf := New()
+	fpf.IncidentInsertion = ii
+
+	wants := map[Location]string{
+		Child:  `<!DOCTYPE html><html><head></head><body><form action="/"><input type="text" name="foo" value="bar" class="error"/><div><input type="checkbox" name="foo1" class="error"/><input type="checkbox" name="foo2" class="error"/><ul class="errors"><li>Error with multiple elements</li></ul></div><ul class="errors"><li>Error with single element.</li></ul></form></body></html>`,
+		Before: `<!DOCTYPE html><html><head></head><body><form action="/"><ul class="errors"><li>Error with single element.</li></ul><input type="text" name="foo" value="bar" class="error"/><ul class="errors"><li>Error with multiple elements</li></ul><div><input type="checkbox" name="foo1" class="error"/><input type="checkbox" name="foo2" class="error"/></div></form></body></html>`,
+		After:  `<!DOCTYPE html><html><head></head><body><form action="/"><input type="text" name="foo" value="bar" class="error"/><ul class="errors"><li>Error with single element.</li></ul><div><input type="checkbox" name="foo1" class="error"/><input type="checkbox" name="foo2" class="error"/></div><ul class="errors"><li>Error with multiple elements</li></ul></form></body></html>`,
+	}
+
+	for location, want := range wants {
+		ii.SingleElementErrorLocation = location
+		ii.MultipleElementErrorLocation = location
+
+		input := strings.NewReader(html)
+		output := new(bytes.Buffer)
+
+		err := fpf.Execute(forms, output, input)
+		if err != nil {
+			t.Error(err)
+		}
+		if string(output.Bytes()) != want {
+			t.Errorf("%s, Execute(`%s`):\nGot:\n%s\nExpected:\n%s", location, html, string(output.Bytes()), want)
+		}
+	}
+}
